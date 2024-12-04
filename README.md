@@ -9,7 +9,7 @@ The following data is displayed:
 - Fulfilled Orders
 - Stock Overview
 
-![Example Screen](example.jpg)
+![Example Screen](example.bmp)
 
 ## Setup
 1. At TRMNL, add a new Private Plugin
