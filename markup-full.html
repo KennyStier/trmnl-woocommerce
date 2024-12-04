@@ -1,0 +1,52 @@
+<div class="layout layout--col gap--space-between">
+  <div class="grid grid--cols-2">
+    <div class="item">
+      <div class="meta"></div>
+      <div class="content">
+        <span class="value value--large value--tnums">{{ total_sales }}</span>
+        <span class="label">Total Sales</span>
+      </div>
+    </div>
+    <div class="item">
+      <div class="meta"></div>
+      <div class="content">
+        <span class="value value--large value--tnums">{{ total_orders }}</span>
+        <span class="label">Orders</span>
+      </div>
+    </div>
+  </div>
+  <div class="w-full b-h-gray-5"></div>
+  <div class="grid grid--cols-2">
+    <div class="item">
+      <div class="meta"></div>
+      <div class="content">
+        <span class="value value--tnums">{{ total_sold_products }}</span>
+        <span class="label">Products Sold</span>
+      </div>
+    </div>
+
+    <div class="item layout--col">
+      <div class="content layout--col">
+      {% for product in stock_overview %}
+        <span class="label">{{ product.instock }} ({{product.stock }}) - {{ product.name }}</span>
+      {% endfor %}
+        </div>
+    </div>
+
+  </div>
+  <div class="item item--large">
+    <div class="meta"></div>
+    <div class="content">
+      <span class="value value--tnums">{{ pending_orders }}</span>
+      <span class="label">Pending Orders</span>
+      <span class="value value--tnums">{{ fulfilled_orders }}</span>
+      <span class="label">Fulfilled Orders</span>
+    </div>
+  </div>
+</div>
+
+<div class="title_bar">
+  <!--<img class="image" src="https://usetrmnl.com/images/plugins/profitwell--render.svg">-->
+  <span class="title">Troskir Shop</span>
+  <span class="instance">Last Update: {{ updated_at }}</span>
+</div>
