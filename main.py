@@ -1,181 +1,209 @@
-#!/usr/bin/env python3
-
-import requests
-import json
-from dotenv import load_dotenv
-from datetime import datetime
 import os
+import requests
+from woocommerce import API
+from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
+# Load environment variables
 load_dotenv()
 
-# WooCommerce API-Konfiguration
 WC_API_URL = os.getenv("WC_API_URL")
 WC_CONSUMER_KEY = os.getenv("WC_CONSUMER_KEY")
 WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
-
-# Webhook URL
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-
-DEBUG = os.getenv("DEBUG") == "True"
-
-# Währungssymbol-Mapping
-CURRENCY_SYMBOLS = {
-    "USD": "$",
-    "EUR": "€",
-    "GBP": "£",
-    "JPY": "¥",
-    "AUD": "A$",
-    "CAD": "C$",
-    "CHF": "CHF",
-    "CNY": "¥",
-    "SEK": "kr",
-    "NZD": "NZ$",
-}
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+DAYS_RANGE = int(os.getenv("DAYS_RANGE", "30"))  # Default to 30 days
 
 
-# Funktion zur Paginierung
-def fetch_all_pages(url, auth):
-    results = []
-    page = 1
-
-    while True:
-        response = requests.get(url, auth=auth, params={"per_page": 100, "page": page})
-        response.raise_for_status()
-        data = response.json()
-
-        if not data:  # Keine weiteren Seiten
-            break
-
-        results.extend(data)
-        page += 1
-
-    return results
-
-
-# Funktion, um WooCommerce-Daten zu holen
 def get_woocommerce_data():
+    """Fetch data from WooCommerce API using official library."""
+    
+    # Initialize WooCommerce API
+    # Remove trailing slash from URL if present
+    api_url = WC_API_URL.rstrip('/')
+    
+    wcapi = API(
+        url=api_url,
+        consumer_key=WC_CONSUMER_KEY,
+        consumer_secret=WC_CONSUMER_SECRET,
+        version="wc/v3",
+        timeout=30,
+        wp_api=True,  # Use WordPress API path
+        query_string_auth=True  # Force query string auth for HTTPS
+    )
+    
     try:
-        # API-Endpunkte
-        orders_url = f"{WC_API_URL}/orders"
-        products_url = f"{WC_API_URL}/products"
-        settings_url = f"{WC_API_URL}/settings/general"
-
-        # Authentifizierung
-        auth = (WC_CONSUMER_KEY, WC_CONSUMER_SECRET)
-
-        # Alle Bestellungen abrufen
-        orders = fetch_all_pages(orders_url, auth)
-
-        # Shop-Einstellungen abrufen (für die Währung)
-        settings_response = requests.get(settings_url, auth=auth)
-        settings_response.raise_for_status()
-        settings = settings_response.json()
-
-        # Währung ermitteln und das entsprechende Symbol nutzen
-        store_currency = next((setting["value"] for setting in settings if setting["id"] == "woocommerce_currency"),
-                              "USD")
-        currency_symbol = CURRENCY_SYMBOLS.get(store_currency, store_currency)
-
-        # Produkte abrufen und Lagerbestand analysieren
-        products = fetch_all_pages(products_url, auth)
-
-        # Nur aktive Produkte berücksichtigen
-        active_products = [product for product in products if product["status"] == "publish"]
-
-        stock_overview = []
-
-        # Produktinformationen und Lagerstatus extrahieren
-        for product in active_products:
-            if product["type"] == "simple":
-                # Für einfache Produkte
-                stock_overview.append({
-                    "name": product["name"],
-                    "instock": "✓" if product["stock_status"] == "instock" else "X",
-                    "stock": product["stock_quantity"] if product["stock_quantity"] is not None else 0
-                })
-
-            elif product["type"] == "variable":
-                # Für variable Produkte: Gesamtanzahl der Varianten ermitteln
-                variants_url = f"{WC_API_URL}/products/{product['id']}/variations"
-                variants = fetch_all_pages(variants_url, auth)
-
-                total_variant_stock = sum(
-                    variant["stock_quantity"] for variant in variants if variant["stock_quantity"] is not None)
-                in_stock = any(variant["stock_status"] == "instock" for variant in variants)
-
-                stock_overview.append({
-                    "name": product["name"],
-                    "instock": "✓" if in_stock else "X",
-                    "stock": total_variant_stock if total_variant_stock > 0 else 0
-                })
-
-        # Stock overview nach Lagerbestand sortieren (absteigend)
-        stock_overview = sorted(stock_overview, key=lambda x: x["stock"], reverse=True)
-
-        # Metriken berechnen
-        total_sales = sum([float(order['total']) for order in orders if order['status'] != 'cancelled'])
-        total_sales_with_currency = f"{currency_symbol}{total_sales:.2f}"
-
-        # `total_orders` ohne stornierte Bestellungen
-        total_orders = len([order for order in orders if order['status'] != 'cancelled'])
-
-        # `pending_orders` nur Bestellungen im Status "processing"
-        pending_orders = len([order for order in orders if order['status'] == 'processing'])
-
-        # `fulfilled_orders` für abgeschlossene Bestellungen
-        fulfilled_orders = len([order for order in orders if order['status'] == 'completed'])
-
-        # Gesamtzahl der verkauften Produkte
-        total_sold_products = sum(
-            sum(item["quantity"] for item in order["line_items"])
-            for order in orders if order['status'] != 'cancelled'
-        )
-
-        return {
-            "total_sales": total_sales_with_currency,
-            "total_orders": total_orders,
-            "pending_orders": pending_orders,
-            "fulfilled_orders": fulfilled_orders,
-            "total_sold_products": total_sold_products,
-            "stock_overview": stock_overview,
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Get orders from configured date range
+        days_ago = (datetime.now() - timedelta(days=DAYS_RANGE)).isoformat()
+        
+        # Fetch all orders (paginated)
+        all_orders = []
+        page = 1
+        per_page = 100
+        
+        print(f"Fetching orders from last {DAYS_RANGE} days (after {days_ago})...")
+        
+        while True:
+            print(f"Fetching page {page}...")
+            response = wcapi.get("orders", params={
+                "per_page": per_page,
+                "page": page,
+                "after": days_ago
+            })
+            
+            if response.status_code != 200:
+                print(f"Error fetching orders: {response.status_code}")
+                print(f"Response: {response.json()}")
+                break
+            
+            orders = response.json()
+            if not orders:
+                print(f"No more orders found. Total fetched: {len(all_orders)}")
+                break
+                
+            all_orders.extend(orders)
+            print(f"Fetched {len(orders)} orders (total so far: {len(all_orders)})")
+            page += 1
+            
+            # Increased safety limit - adjust if you have even more orders
+            if page > 100:  # Now allows up to 10,000 orders
+                print(f"WARNING: Reached safety limit of 100 pages. Total orders: {len(all_orders)}")
+                break
+        
+        # Calculate metrics
+        total_sales = sum(float(order.get("total", 0)) for order in all_orders)
+        total_orders = len(all_orders)
+        
+        # Count order statuses
+        pending_orders = sum(1 for order in all_orders if order.get("status") == "pending")
+        processing_orders = sum(1 for order in all_orders if order.get("status") == "processing")
+        completed_orders = sum(1 for order in all_orders if order.get("status") == "completed")
+        fulfilled_orders = completed_orders  # Completed = Fulfilled
+        
+        # Calculate products sold
+        products_sold = 0
+        for order in all_orders:
+            for item in order.get("line_items", []):
+                products_sold += item.get("quantity", 0)
+        
+        # Get low stock products
+        print("Fetching product inventory data...")
+        
+        # Fetch all products with stock management enabled
+        all_products = []
+        page = 1
+        
+        while True:
+            products_response = wcapi.get("products", params={
+                "per_page": 100,
+                "page": page,
+                "stock_status": "instock",
+                "manage_stock": True  # Only products with stock management
+            })
+            
+            if products_response.status_code != 200:
+                print(f"Error fetching products: {products_response.status_code}")
+                break
+            
+            products = products_response.json()
+            if not products:
+                break
+                
+            all_products.extend(products)
+            page += 1
+            
+            # Limit to 5 pages (500 products) for performance
+            if page > 5:
+                break
+        
+        print(f"Found {len(all_products)} products with stock management")
+        
+        # Filter and sort products by stock quantity
+        low_stock_products = []
+        for product in all_products:
+            stock_qty = product.get("stock_quantity")
+            # Include products with stock quantity (not None) that are low
+            if stock_qty is not None and isinstance(stock_qty, (int, float)):
+                low_stock_threshold = product.get("low_stock_amount")
+                # If no threshold set, use default of 5
+                if low_stock_threshold is None:
+                    low_stock_threshold = 5
+                
+                if stock_qty <= low_stock_threshold and stock_qty >= 0:
+                    low_stock_products.append({
+                        "name": product.get("name", "Unknown"),
+                        "stock": int(stock_qty),
+                        "threshold": int(low_stock_threshold)
+                    })
+        
+        # Sort by stock quantity (lowest first)
+        low_stock_products.sort(key=lambda x: x["stock"])
+        
+        print(f"Found {len(low_stock_products)} low stock items")
+        
+        # Prepare data for TRMNL
+        data = {
+            "merge_variables": {
+                "total_sales": f"${total_sales:,.2f}",
+                "total_orders": total_orders,
+                "products_sold": products_sold,
+                "pending_orders": pending_orders,
+                "processing_orders": processing_orders,
+                "fulfilled_orders": fulfilled_orders,
+                "low_stock_count": len(low_stock_products),
+                "low_stock_items": low_stock_products[:5],  # Top 5 for display
+                "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M")
+            }
         }
+        
+        return data
+        
     except Exception as e:
-        print(f"Fehler beim Abrufen der Daten: {e}")
+        print(f"Error fetching WooCommerce data: {str(e)}")
         return None
 
 
-# Funktion, um Daten an den Webhook zu senden
-def send_to_webhook(data):
+def send_to_trmnl(data):
+    """Send data to TRMNL webhook."""
+    
+    if DEBUG:
+        print("DEBUG MODE: Would send to TRMNL:")
+        print(data)
+        return True
+    
     try:
-        webhook_body = {
-            "merge_variables": {
-                "updated_at": data["updated_at"],
-                "total_sales": data["total_sales"],
-                "total_orders": data["total_orders"],
-                "pending_orders": data["pending_orders"],
-                "fulfilled_orders": data["fulfilled_orders"],
-                "total_sold_products": data["total_sold_products"],
-                "stock_overview": data["stock_overview"],
-            }
-        }
-        json_string = json.dumps(webhook_body, indent=4)
-
-        # Debugging
-        DEBUG = True
-        if DEBUG:
-            print(json_string)
-
-        # Webhook senden
-        response = requests.post(WEBHOOK_URL, json=webhook_body)
-        response.raise_for_status()
-        print(f"Webhook erfolgreich gesendet: {response.status_code}")
+        response = requests.post(
+            WEBHOOK_URL,
+            json=data,
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            print("Successfully sent data to TRMNL")
+            return True
+        else:
+            print(f"Error sending to TRMNL: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+            
     except Exception as e:
-        print(f"Fehler beim Senden an den Webhook: {e}")
+        print(f"Error sending to TRMNL: {str(e)}")
+        return False
 
 
-# Hauptprogramm
-if __name__ == "__main__":
+def main():
+    """Main function to run the plugin."""
+    
+    print("Fetching WooCommerce data...")
     data = get_woocommerce_data()
+    
     if data:
-        send_to_webhook(data)
+        print("Sending data to TRMNL...")
+        send_to_trmnl(data)
+    else:
+        print("Failed to fetch WooCommerce data")
+
+
+if __name__ == "__main__":
+    main()
